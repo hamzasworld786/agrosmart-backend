@@ -10,3 +10,5 @@ web3==7.4.0
 python-dotenv==1.2.0
 gunicorn==23.0.0
 whitenoise==6.9.0
+celery==5.4.0
+redis==5.0.1

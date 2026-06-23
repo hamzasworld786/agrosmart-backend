@@ -77,33 +77,44 @@ WSGI_APPLICATION = 'agrosmart_backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-# Check if running on Azure App Service
-if 'WEBSITE_HOSTNAME' in os.environ:
-    # On Azure - use SQLite (bypasses driver issues)
+# Check if running on Azure App Service or if SQLite is requested/fallback
+use_sqlite = 'WEBSITE_HOSTNAME' in os.environ or os.environ.get('USE_SQLITE', 'True') == 'True'
+
+if use_sqlite:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
             'NAME': BASE_DIR / 'db.sqlite3',
         }
     }
-    print("🔵 Running on Azure - using SQLite database")
+    print("[SQLite] Using SQLite database")
 else:
-    # Running locally - use Azure SQL Database
-    DATABASES = {
-        'default': {
-            'ENGINE': 'sql_server.pyodbc',
-            'NAME': 'agrosmart-db',
-            'USER': 'agrosmartadmin',
-            'PASSWORD': 'AgroSmart@2024',
-            'HOST': 'agrosmart-sql-server.database.windows.net',
-            'PORT': '1433',
-            'OPTIONS': {
-                'driver': 'ODBC Driver 18 for SQL Server',
-                'extra_params': 'Encrypt=yes;TrustServerCertificate=no;',
-            },
+    try:
+        import pyodbc
+        # Running locally - use Azure SQL Database
+        DATABASES = {
+            'default': {
+                'ENGINE': 'sql_server.pyodbc',
+                'NAME': 'agrosmart-db',
+                'USER': 'agrosmartadmin',
+                'PASSWORD': 'AgroSmart@2024',
+                'HOST': 'agrosmart-sql-server.database.windows.net',
+                'PORT': '1433',
+                'OPTIONS': {
+                    'driver': 'ODBC Driver 18 for SQL Server',
+                    'extra_params': 'Encrypt=yes;TrustServerCertificate=no;',
+                },
+            }
         }
-    }
-    print("🟢 Running locally - using Azure SQL Database")
+        print("[SQL Server] Running locally - using Azure SQL Database")
+    except ImportError:
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.sqlite3',
+                'NAME': BASE_DIR / 'db.sqlite3',
+            }
+        }
+        print("[Fallback] ODBC driver / pyodbc not found. Falling back to SQLite database.")
 
 
 # Password validation
@@ -149,3 +160,12 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS settings (add at the very bottom)
 CORS_ALLOW_ALL_ORIGINS = True
+
+# Celery configurations
+CELERY_BROKER_URL = os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/0')
+CELERY_RESULT_BACKEND = os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/0')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True

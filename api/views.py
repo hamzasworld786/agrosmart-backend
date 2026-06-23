@@ -196,11 +196,34 @@
 import joblib
 import os
 import json
+import threading
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .pesticide_knowledge import find_pesticide
 from .weather_service import get_weather, get_farming_advice
 from .blockchain_service import blockchain_service
+from .tasks import log_recommendation_task
+
+def trigger_async_blockchain_log(type_name, recommendation, input_data):
+    """
+    Triggers the blockchain logging asynchronously.
+    First tries to dispatch to the Celery task runner.
+    If the broker is offline or Redis is not running, it falls back to
+    running in a background daemon thread to maintain sub-50ms response times.
+    """
+    input_data_json = json.dumps(input_data)
+    try:
+        # Attempt to queue the Celery task asynchronously
+        log_recommendation_task.delay(type_name, recommendation, input_data_json)
+        print(f"✅ Dispatched {type_name} blockchain log task to Celery queue.")
+    except Exception as celery_error:
+        print(f"⚠️ Celery dispatch failed: {celery_error}. Falling back to background Python thread.")
+        t = threading.Thread(
+            target=blockchain_service.log_recommendation,
+            args=(type_name, recommendation, input_data_json),
+            daemon=True
+        )
+        t.start()
 
 api_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -251,15 +274,12 @@ def crop_recommendation(request):
         pred_num = crop_model.predict([features])[0]
         crop_name = crop_encoder.inverse_transform([pred_num])[0]
         
-        # Log to blockchain
-        try:
-            blockchain_service.log_recommendation(
-                type_name='crop',
-                recommendation=crop_name,
-                input_data=json.dumps(data)
-            )
-        except Exception as blockchain_error:
-            print(f"Blockchain logging failed (non-critical): {blockchain_error}")
+        # Log to blockchain asynchronously
+        trigger_async_blockchain_log(
+            type_name='crop',
+            recommendation=crop_name,
+            input_data=data
+        )
         
         return Response({
             'status': 'success', 
@@ -305,15 +325,12 @@ def fertilizer_recommendation(request):
         pred_num = fertilizer_model.predict([features])[0]
         fertilizer_name = fertilizer_target_encoder.inverse_transform([pred_num])[0]
         
-        # Log to blockchain
-        try:
-            blockchain_service.log_recommendation(
-                type_name='fertilizer',
-                recommendation=fertilizer_name,
-                input_data=json.dumps(data)
-            )
-        except Exception as blockchain_error:
-            print(f"Blockchain logging failed (non-critical): {blockchain_error}")
+        # Log to blockchain asynchronously
+        trigger_async_blockchain_log(
+            type_name='fertilizer',
+            recommendation=fertilizer_name,
+            input_data=data
+        )
         
         return Response({
             'status': 'success',
@@ -352,15 +369,12 @@ def pesticide_recommendation(request):
         recommendation = find_pesticide(crop, problem)
         pesticide_name = recommendation.get('pesticide', 'Unknown')
         
-        # Log to blockchain
-        try:
-            blockchain_service.log_recommendation(
-                type_name='pesticide',
-                recommendation=pesticide_name,
-                input_data=json.dumps({'crop': crop, 'problem': problem})
-            )
-        except Exception as blockchain_error:
-            print(f"Blockchain logging failed (non-critical): {blockchain_error}")
+        # Log to blockchain asynchronously
+        trigger_async_blockchain_log(
+            type_name='pesticide',
+            recommendation=pesticide_name,
+            input_data={'crop': crop, 'problem': problem}
+        )
         
         return Response({
             'status': 'success',
@@ -406,15 +420,12 @@ def weather_tips(request):
         # Get AI advice
         advice = get_farming_advice(weather, crop)
         
-        # Log to blockchain
-        try:
-            blockchain_service.log_recommendation(
-                type_name='weather',
-                recommendation=f"Weather advice for {weather['location']}",
-                input_data=json.dumps({'lat': lat, 'lon': lon, 'crop': crop})
-            )
-        except Exception as blockchain_error:
-            print(f"Blockchain logging failed (non-critical): {blockchain_error}")
+        # Log to blockchain asynchronously
+        trigger_async_blockchain_log(
+            type_name='weather',
+            recommendation=f"Weather advice for {weather['location']}",
+            input_data={'lat': lat, 'lon': lon, 'crop': crop}
+        )
         
         return Response({
             'status': 'success',
