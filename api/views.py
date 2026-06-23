@@ -196,13 +196,35 @@
 import joblib
 import os
 import json
+import socket
 import threading
+from urllib.parse import urlparse
+from django.conf import settings
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .pesticide_knowledge import find_pesticide
 from .weather_service import get_weather, get_farming_advice
 from .blockchain_service import blockchain_service
 from .tasks import log_recommendation_task
+
+def is_celery_broker_online():
+    """
+    Performs a quick TCP socket connection check to see if the Celery broker
+    is reachable. This prevents blocking calls to Celery when Redis is offline.
+    """
+    try:
+        broker_url = getattr(settings, 'CELERY_BROKER_URL', 'redis://127.0.0.1:6379/0')
+        parsed = urlparse(broker_url)
+        host = parsed.hostname or '127.0.0.1'
+        port = parsed.port or 6379
+        
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.02)  # 20ms connection timeout
+        s.connect((host, port))
+        s.close()
+        return True
+    except Exception:
+        return False
 
 def trigger_async_blockchain_log(type_name, recommendation, input_data):
     """
@@ -212,18 +234,29 @@ def trigger_async_blockchain_log(type_name, recommendation, input_data):
     running in a background daemon thread to maintain sub-50ms response times.
     """
     input_data_json = json.dumps(input_data)
-    try:
-        # Attempt to queue the Celery task asynchronously
-        log_recommendation_task.delay(type_name, recommendation, input_data_json)
-        print(f"✅ Dispatched {type_name} blockchain log task to Celery queue.")
-    except Exception as celery_error:
-        print(f"⚠️ Celery dispatch failed: {celery_error}. Falling back to background Python thread.")
-        t = threading.Thread(
-            target=blockchain_service.log_recommendation,
-            args=(type_name, recommendation, input_data_json),
-            daemon=True
-        )
-        t.start()
+    
+    # Perform a quick socket check to bypass Celery if the broker is offline
+    if is_celery_broker_online():
+        try:
+            # Attempt to queue the Celery task asynchronously with retry=False to fail immediately if broker is offline
+            log_recommendation_task.apply_async(
+                args=(type_name, recommendation, input_data_json),
+                retry=False
+            )
+            print(f"✅ Dispatched {type_name} blockchain log task to Celery queue.")
+            return
+        except Exception as celery_error:
+            print(f"⚠️ Celery dispatch failed: {celery_error}. Falling back to background Python thread.")
+    else:
+        print("⚠️ Celery broker is offline. Falling back directly to background Python thread.")
+        
+    # Fallback: run the Web3 logging task in a daemon thread so it runs in the background
+    t = threading.Thread(
+        target=blockchain_service.log_recommendation,
+        args=(type_name, recommendation, input_data_json),
+        daemon=True
+    )
+    t.start()
 
 api_dir = os.path.dirname(os.path.abspath(__file__))
 

@@ -2,7 +2,7 @@ import json
 from celery import shared_task
 from .blockchain_service import blockchain_service
 
-@shared_task
+@shared_task(ignore_result=True)
 def log_recommendation_task(type_name, recommendation, input_data_json):
     """
     Celery background task to log a recommendation to the blockchain.

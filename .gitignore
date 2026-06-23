@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+db.sqlite3
+.env
+*.pkl
+*.zip
+test_*.py
+test_celery_perf.py
+test_broker_check.py
